@@ -58,13 +58,14 @@ var (
 	concurrency         = cli.Flag("concurrency", "Number of concurrent workers.").Default(strconv.Itoa(runtime.NumCPU())).Int()
 	noVerification      = cli.Flag("no-verification", "Don't verify the results.").Bool()
 	onlyVerified        = cli.Flag("only-verified", "Only output verified results.").Hidden().Bool()
-	results             = cli.Flag("results", "Specifies which type(s) of results to output: verified, unknown, unverified, filtered_unverified. Defaults to verified,unverified,unknown.").String()
+	results             = cli.Flag("results", "Specifies which type(s) of results to output: verified (confirmed valid by API), unknown (verification failed due to error), unverified (detected but not verified), filtered_unverified (unverified but would have been filtered out). Defaults to verified,unverified,unknown.").String()
 	noColor             = cli.Flag("no-color", "Disable colorized output").Bool()
 	noColour            = cli.Flag("no-colour", "Alias for --no-color").Hidden().Bool()
 
 	allowVerificationOverlap   = cli.Flag("allow-verification-overlap", "Allow verification of similar credentials across detectors").Bool()
 	filterUnverified           = cli.Flag("filter-unverified", "Only output first unverified result per chunk per detector if there are more than one results.").Bool()
 	filterEntropy              = cli.Flag("filter-entropy", "Filter unverified results with Shannon entropy. Start with 3.0.").Float64()
+	allowlistSecretsFile       = cli.Flag("allowlist-secrets-file", "Path to YAML file with secrets to allowlist. See examples/allowlist.yml for format.").String()
 	scanEntireChunk            = cli.Flag("scan-entire-chunk", "Scan the entire chunk for secrets.").Hidden().Default("false").Bool()
 	compareDetectionStrategies = cli.Flag("compare-detection-strategies", "Compare different detection strategies for matching spans").Hidden().Default("false").Bool()
 	configFilename             = cli.Flag("config", "Path to configuration file.").ExistingFile()
@@ -72,6 +73,7 @@ var (
 	printAvgDetectorTime = cli.Flag("print-avg-detector-time", "Print the average time spent on each detector.").Bool()
 	noUpdate             = cli.Flag("no-update", "Don't check for updates.").Bool()
 	fail                 = cli.Flag("fail", "Exit with code 183 if results are found.").Bool()
+	failOnScanErrors     = cli.Flag("fail-on-scan-errors", "Exit with non-zero error code if an error occurs during the scan.").Bool()
 	verifiers            = cli.Flag("verifier", "Set custom verification endpoints.").StringMap()
 	customVerifiersOnly  = cli.Flag("custom-verifiers-only", "Only use custom verification endpoints.").Bool()
 	detectorTimeout      = cli.Flag("detector-timeout", "Maximum time to spend scanning chunks per detector (e.g., 30s).").Duration()
@@ -90,20 +92,21 @@ var (
 	skipAdditionalRefs = cli.Flag("skip-additional-refs", "Skip additional references.").Bool()
 	userAgentSuffix    = cli.Flag("user-agent-suffix", "Suffix to add to User-Agent.").String()
 
-	gitScan             = cli.Command("git", "Find credentials in git repositories.")
-	gitScanURI          = gitScan.Arg("uri", "Git repository URL. https://, file://, or ssh:// schema expected.").Required().String()
-	gitScanIncludePaths = gitScan.Flag("include-paths", "Path to file with newline separated regexes for files to include in scan.").Short('i').String()
-	gitScanExcludePaths = gitScan.Flag("exclude-paths", "Path to file with newline separated regexes for files to exclude in scan.").Short('x').String()
-	gitScanExcludeGlobs = gitScan.Flag("exclude-globs", "Comma separated list of globs to exclude in scan. This option filters at the `git log` level, resulting in faster scans.").String()
-	gitScanSinceCommit  = gitScan.Flag("since-commit", "Commit to start scan from.").String()
-	gitScanBranch       = gitScan.Flag("branch", "Branch to scan.").String()
-	gitScanMaxDepth     = gitScan.Flag("max-depth", "Maximum depth of commits to scan.").Int()
-	gitScanBare         = gitScan.Flag("bare", "Scan bare repository (e.g. useful while using in pre-receive hooks)").Bool()
-	gitClonePath        = gitScan.Flag("clone-path", "Custom path where the repository should be cloned (default: temp dir).").String()
-	gitNoCleanup        = gitScan.Flag("no-cleanup", "Do not delete cloned repositories after scanning (can only be used with --clone-path).").Bool()
-	_                   = gitScan.Flag("allow", "No-op flag for backwards compat.").Bool()
-	_                   = gitScan.Flag("entropy", "No-op flag for backwards compat.").Bool()
-	_                   = gitScan.Flag("regex", "No-op flag for backwards compat.").Bool()
+	gitScan                = cli.Command("git", "Find credentials in git repositories.")
+	gitScanURI             = gitScan.Arg("uri", "Git repository URL. https://, file://, or ssh:// schema expected.").Required().String()
+	gitScanIncludePaths    = gitScan.Flag("include-paths", "Path to file with newline separated regexes for files to include in scan.").Short('i').String()
+	gitScanExcludePaths    = gitScan.Flag("exclude-paths", "Path to file with newline separated regexes for files to exclude in scan.").Short('x').String()
+	gitScanExcludeGlobs    = gitScan.Flag("exclude-globs", "Comma separated list of globs to exclude in scan. This option filters at the `git log` level, resulting in faster scans.").String()
+	gitScanSinceCommit     = gitScan.Flag("since-commit", "Commit to start scan from.").String()
+	gitScanBranch          = gitScan.Flag("branch", "Branch to scan.").String()
+	gitScanMaxDepth        = gitScan.Flag("max-depth", "Maximum depth of commits to scan.").Int()
+	gitScanBare            = gitScan.Flag("bare", "Scan bare repository (e.g. useful while using in pre-receive hooks)").Bool()
+	gitClonePath           = gitScan.Flag("clone-path", "Custom path where the repository should be cloned (default: temp dir).").String()
+	gitNoCleanup           = gitScan.Flag("no-cleanup", "Do not delete cloned repositories after scanning (can only be used with --clone-path).").Bool()
+	gitTrustLocalGitConfig = gitScan.Flag("trust-local-git-config", "Trust local git config.").Bool()
+	_                      = gitScan.Flag("allow", "No-op flag for backwards compat.").Bool()
+	_                      = gitScan.Flag("entropy", "No-op flag for backwards compat.").Bool()
+	_                      = gitScan.Flag("regex", "No-op flag for backwards compat.").Bool()
 
 	githubScan                  = cli.Command("github", "Find credentials in GitHub repositories.")
 	githubScanEndpoint          = githubScan.Flag("endpoint", "GitHub endpoint.").Default("https://api.github.com").String()
@@ -191,10 +194,12 @@ var (
 	circleCiScan      = cli.Command("circleci", "Scan CircleCI")
 	circleCiScanToken = circleCiScan.Flag("token", "CircleCI token. Can also be provided with environment variable").Envar("CIRCLECI_TOKEN").Required().String()
 
-	dockerScan         = cli.Command("docker", "Scan Docker Image")
-	dockerScanImages   = dockerScan.Flag("image", "Docker image to scan. Use the file:// prefix to point to a local tarball, the docker:// prefix to point to the docker daemon, otherwise an image registry is assumed.").Required().Strings()
-	dockerScanToken    = dockerScan.Flag("token", "Docker bearer token. Can also be provided with environment variable").Envar("DOCKER_TOKEN").String()
-	dockerExcludePaths = dockerScan.Flag("exclude-paths", "Comma separated list of paths to exclude from scan").String()
+	dockerScan              = cli.Command("docker", "Scan Docker Image")
+	dockerScanImages        = dockerScan.Flag("image", "Docker image to scan. Use the file:// prefix to point to a local tarball, the docker:// prefix to point to the docker daemon, otherwise an image registry is assumed.").Strings()
+	dockerScanToken         = dockerScan.Flag("token", "Docker bearer token. Can also be provided with environment variable").Envar("DOCKER_TOKEN").String()
+	dockerExcludePaths      = dockerScan.Flag("exclude-paths", "Comma separated list of paths to exclude from scan").String()
+	dockerScanNamespace     = dockerScan.Flag("namespace", "Docker namespace (organization or user). For non-Docker Hub registries, include the registry address as well (e.g., ghcr.io/namespace or quay.io/namespace).").String()
+	dockerScanRegistryToken = dockerScan.Flag("registry-token", "Optional Docker registry access token. Provide this if you want to include private images within the specified namespace.").String()
 
 	travisCiScan      = cli.Command("travisci", "Scan TravisCI")
 	travisCiScanToken = travisCiScan.Flag("token", "TravisCI token. Can also be provided with environment variable").Envar("TRAVISCI_TOKEN").Required().String()
@@ -463,6 +468,10 @@ func run(state overseer.State) {
 
 	// OSS Default simplified gitlab enumeration
 	feature.UseSimplifiedGitlabEnumeration.Store(true)
+	feature.GitlabProjectsPerPage.Store(100)
+
+	// OSS Default using github graphql api for issues, pr's and comments
+	feature.UseGithubGraphQLAPI.Store(false)
 
 	conf := &config.Config{}
 	if *configFilename != "" {
@@ -517,6 +526,25 @@ func run(state overseer.State) {
 
 	verificationCacheMetrics := verificationcache.InMemoryMetrics{}
 
+	// Load allowlisted secrets if specified
+	var allowlistedSecrets []detectors.AllowlistEntry
+	if *allowlistSecretsFile != "" {
+		allowlistedSecrets, err = detectors.LoadAllowlistedSecrets(*allowlistSecretsFile)
+		if err != nil {
+			logFatal(err, "failed to load allowlisted secrets")
+		}
+	}
+	allowListedSecrets := append(allowlistedSecrets, conf.Allowlists...)
+	compiledAllowlist := detectors.CompileAllowlistPatterns(allowListedSecrets)
+
+	logger.Info(
+		"loaded allowlisted secrets",
+		"exact_matches", len(compiledAllowlist.ExactMatches),
+		"regex_patterns", len(compiledAllowlist.CompiledRegexes),
+		"total", len(compiledAllowlist.ExactMatches)+len(compiledAllowlist.CompiledRegexes),
+		"file", *allowlistSecretsFile,
+	)
+
 	engConf := engine.Config{
 		Concurrency:       *concurrency,
 		ConfiguredSources: conf.Sources,
@@ -533,6 +561,7 @@ func run(state overseer.State) {
 		Dispatcher:               engine.NewPrinterDispatcher(printer),
 		FilterUnverified:         *filterUnverified,
 		FilterEntropy:            *filterEntropy,
+		AllowlistedSecrets:       compiledAllowlist,
 		VerificationOverlap:      *allowVerificationOverlap,
 		Results:                  parsedResults,
 		PrintAvgDetectorTime:     *printAvgDetectorTime,
@@ -709,43 +738,48 @@ func runSingleScan(ctx context.Context, cmd string, cfg engine.Config) (metrics,
 	}
 	eng.Start(ctx)
 
+	persistGitRepo := *gitNoCleanup || *githubNoCleanup || *gitlabNoCleanup
+	gitCloneTempPath := ""
+
 	defer func() {
 		// Clean up temporary artifacts.
 		if err := cleantemp.CleanTempArtifacts(ctx); err != nil {
 			ctx.Logger().Error(err, "error cleaning temp artifacts")
+		}
+
+		if *jsonLegacy {
+			// If JSON legacy is enabled, that means the cloned repos are not deleted yet
+			// because they were needed for outputting legacy JSON.
+			// We only clean them up here if the user did not request to persist them.
+			if !persistGitRepo {
+				if err := cleantemp.CleanTempDirsForLegacyJSON(gitCloneTempPath); err != nil {
+					ctx.Logger().Error(err, "error cleaning temp artifacts for legacy JSON")
+				}
+			}
 		}
 	}()
 
 	var refs []sources.JobProgressRef
 	switch cmd {
 	case gitScan.FullCommand():
-		// validate the commit for local repository only
-		if *gitScanSinceCommit != "" && strings.HasPrefix(*gitScanURI, "file") {
-			if !isValidCommit(*gitScanURI, *gitScanSinceCommit) {
-				ctx.Logger().Info("Warning: The provided commit hash appears to be invalid.")
-			}
-		}
-
-		// clone path is only supported for HTTPS repository URLs, not for local repositories.
-		if *gitClonePath != "" && strings.HasPrefix(*gitScanURI, "file://") {
-			return scanMetrics, fmt.Errorf("invalid configuration: --clone-path cannot be used with a local repository URL")
-		}
 
 		if err := validateClonePath(*gitClonePath, *gitNoCleanup); err != nil {
 			return scanMetrics, err
 		}
 
 		gitCfg := sources.GitConfig{
-			URI:              *gitScanURI,
-			IncludePathsFile: *gitScanIncludePaths,
-			ExcludePathsFile: *gitScanExcludePaths,
-			HeadRef:          *gitScanBranch,
-			BaseRef:          *gitScanSinceCommit,
-			MaxDepth:         *gitScanMaxDepth,
-			Bare:             *gitScanBare,
-			ExcludeGlobs:     *gitScanExcludeGlobs,
-			ClonePath:        *gitClonePath,
-			NoCleanup:        *gitNoCleanup,
+			URI:                 *gitScanURI,
+			IncludePathsFile:    *gitScanIncludePaths,
+			ExcludePathsFile:    *gitScanExcludePaths,
+			HeadRef:             *gitScanBranch,
+			BaseRef:             *gitScanSinceCommit,
+			MaxDepth:            *gitScanMaxDepth,
+			Bare:                *gitScanBare,
+			ExcludeGlobs:        *gitScanExcludeGlobs,
+			ClonePath:           *gitClonePath,
+			NoCleanup:           *gitNoCleanup,
+			PrintLegacyJSON:     *jsonLegacy,
+			TrustLocalGitConfig: *gitTrustLocalGitConfig,
 		}
 		if ref, err := eng.ScanGit(ctx, gitCfg); err != nil {
 			return scanMetrics, fmt.Errorf("failed to scan Git: %v", err)
@@ -753,6 +787,7 @@ func runSingleScan(ctx context.Context, cmd string, cfg engine.Config) (metrics,
 			refs = []sources.JobProgressRef{ref}
 		}
 	case githubScan.FullCommand():
+		gitCloneTempPath = *githubClonePath
 		filter, err := common.FilterFromFiles(*githubScanIncludePaths, *githubScanExcludePaths)
 		if err != nil {
 			return scanMetrics, fmt.Errorf("could not create filter: %v", err)
@@ -788,6 +823,7 @@ func runSingleScan(ctx context.Context, cmd string, cfg engine.Config) (metrics,
 			ClonePath:                  *githubClonePath,
 			NoCleanup:                  *githubNoCleanup,
 			IgnoreGists:                *githubIgnoreGists,
+			PrintLegacyJSON:            *jsonLegacy,
 		}
 
 		if ref, err := eng.ScanGitHub(ctx, cfg); err != nil {
@@ -809,6 +845,7 @@ func runSingleScan(ctx context.Context, cmd string, cfg engine.Config) (metrics,
 			refs = []sources.JobProgressRef{ref}
 		}
 	case gitlabScan.FullCommand():
+		gitCloneTempPath = *gitlabClonePath
 		filter, err := common.FilterFromFiles(*gitlabScanIncludePaths, *gitlabScanExcludePaths)
 		if err != nil {
 			return scanMetrics, fmt.Errorf("could not create filter: %v", err)
@@ -823,16 +860,17 @@ func runSingleScan(ctx context.Context, cmd string, cfg engine.Config) (metrics,
 		}
 
 		cfg := sources.GitlabConfig{
-			Endpoint:     *gitlabScanEndpoint,
-			Token:        *gitlabScanToken,
-			Repos:        *gitlabScanRepos,
-			GroupIds:     *gitlabScanGroupIds,
-			IncludeRepos: *gitlabScanIncludeRepos,
-			ExcludeRepos: *gitlabScanExcludeRepos,
-			Filter:       filter,
-			AuthInUrl:    *gitlabAuthInUrl,
-			ClonePath:    *gitlabClonePath,
-			NoCleanup:    *gitlabNoCleanup,
+			Endpoint:        *gitlabScanEndpoint,
+			Token:           *gitlabScanToken,
+			Repos:           *gitlabScanRepos,
+			GroupIds:        *gitlabScanGroupIds,
+			IncludeRepos:    *gitlabScanIncludeRepos,
+			ExcludeRepos:    *gitlabScanExcludeRepos,
+			Filter:          filter,
+			AuthInUrl:       *gitlabAuthInUrl,
+			ClonePath:       *gitlabClonePath,
+			NoCleanup:       *gitlabNoCleanup,
+			PrintLegacyJSON: *jsonLegacy,
 		}
 
 		if ref, err := eng.ScanGitLab(ctx, cfg); err != nil {
@@ -919,11 +957,25 @@ func runSingleScan(ctx context.Context, cmd string, cfg engine.Config) (metrics,
 			refs = []sources.JobProgressRef{ref}
 		}
 	case dockerScan.FullCommand():
+		if *dockerScanImages != nil && *dockerScanNamespace != "" {
+			return scanMetrics, fmt.Errorf("invalid config: you cannot specify both images and namespace at the same time")
+		}
+
+		if *dockerScanImages == nil && *dockerScanNamespace == "" {
+			return scanMetrics, fmt.Errorf("invalid config: both images and namespace cannot be empty; one is required")
+		}
+
+		if *dockerScanRegistryToken != "" && *dockerScanNamespace == "" {
+			return scanMetrics, fmt.Errorf("invalid config: registry token can only be used with registry namespace")
+		}
+
 		cfg := sources.DockerConfig{
 			BearerToken:       *dockerScanToken,
 			Images:            *dockerScanImages,
 			UseDockerKeychain: *dockerScanToken == "",
 			ExcludePaths:      strings.Split(*dockerExcludePaths, ","),
+			Namespace:         *dockerScanNamespace,
+			RegistryToken:     *dockerScanRegistryToken,
 		}
 		if ref, err := eng.ScanDocker(ctx, cfg); err != nil {
 			return scanMetrics, fmt.Errorf("failed to scan Docker: %v", err)
@@ -1060,8 +1112,12 @@ func runSingleScan(ctx context.Context, cmd string, cfg engine.Config) (metrics,
 	}
 
 	// Print any non-fatal errors reported during the scan.
+	var retErr error
 	for _, ref := range refs {
 		if errs := ref.Snapshot().Errors; len(errs) > 0 {
+			if *failOnScanErrors {
+				retErr = fmt.Errorf("encountered errors during scan")
+			}
 			errMsgs := make([]string, len(errs))
 			for i := 0; i < len(errs); i++ {
 				errMsgs[i] = errs[i].Error()
@@ -1078,7 +1134,7 @@ func runSingleScan(ctx context.Context, cmd string, cfg engine.Config) (metrics,
 		printAverageDetectorTime(eng)
 	}
 
-	return metrics{Metrics: eng.GetMetrics(), hasFoundResults: eng.HasFoundResults()}, nil
+	return metrics{Metrics: eng.GetMetrics(), hasFoundResults: eng.HasFoundResults()}, retErr
 }
 
 // parseResults ensures that users provide valid CSV input to `--results`.
@@ -1140,18 +1196,6 @@ func printAverageDetectorTime(e *engine.Engine) {
 	for detectorName, duration := range e.GetDetectorsMetrics() {
 		fmt.Fprintf(os.Stderr, "%s: %s\n", detectorName, duration)
 	}
-}
-
-// Function to check if the commit is valid
-func isValidCommit(uri, commit string) bool {
-	// handle file:// urls
-	repoPath, _ := strings.CutPrefix(uri, "file://") // remove the prefix to validate against the repo path
-	output, err := exec.Command("git", "-C", repoPath, "cat-file", "-t", commit).Output()
-	if err != nil {
-		return false
-	}
-
-	return strings.TrimSpace(string(output)) == "commit"
 }
 
 // validateClonePath ensures that --clone-path, if provided, exists and is a directory.
